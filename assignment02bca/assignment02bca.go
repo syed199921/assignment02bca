@@ -3,29 +3,34 @@ package assignment02bca
 import (
 	"crypto/sha256"
 	"fmt"
+	"math/rand"
 	"strconv"
 	"time"
 )
 
 type MerkleNode struct {
-	left   *MerkleNode
-	right  *MerkleNode
-	parent *MerkleNode
-	hash   string
+	left  *MerkleNode
+	right *MerkleNode
+	hash  string
 }
+
+var transactions []string = nil
 
 type Block struct {
 	transactions      []string
 	nonce             int
 	previousHash      string
 	hash              string
-	timeOfTransaction time.Time
+	timeOfTransaction string
 	previous          *Block
 	merkleRoot        *MerkleNode
 }
 
 type BlockChain struct {
-	tail *Block
+	tail                         *Block
+	numberOfTransactionsPerBlock int
+	minBlockHash                 string
+	maxBlockHash                 string
 }
 
 func CalculateHash(stringToHash string) string {
@@ -38,7 +43,7 @@ func (b *Block) buildMerkleTree() *MerkleNode {
 	var nodes []*MerkleNode
 
 	for _, transaction := range b.transactions {
-		nodes = append(nodes, &MerkleNode{nil, nil, nil, CalculateHash(transaction)})
+		nodes = append(nodes, &MerkleNode{nil, nil, CalculateHash(transaction)})
 	}
 
 	for len(nodes) > 1 {
@@ -51,12 +56,8 @@ func (b *Block) buildMerkleTree() *MerkleNode {
 		for i := 0; i < len(nodes); i += 2 {
 			left := nodes[i]
 			right := nodes[i+1]
-			hash := CalculateHash(left.hash + right.hash)
-
-			newNode := &MerkleNode{left, right, nil, hash}
-
-			left.parent = newNode
-			right.parent = newNode
+			hash := CalculateHash(fmt.Sprintf("%x", []byte(left.hash)) + fmt.Sprintf("%x", []byte(right.hash)))
+			newNode := &MerkleNode{left, right, hash}
 			newNodes = append(newNodes, newNode)
 
 		}
@@ -67,10 +68,24 @@ func (b *Block) buildMerkleTree() *MerkleNode {
 	return nodes[0]
 
 }
+func generateRandomNonce() int {
+	rand.Seed(time.Now().UnixNano())
+	return rand.Intn(1000) + 1
+}
+
+func (bc *BlockChain) AddTransaction(transaction string) {
+	transactions = append(transactions, transaction)
+	fmt.Println("Transaction added successfully")
+	fmt.Println("Number of transactions in the block: ", len(transactions))
+	if len(transactions) == bc.numberOfTransactionsPerBlock {
+		bc.AddBlock(transactions, generateRandomNonce())
+		transactions = nil
+	}
+}
 
 func (bc *BlockChain) AddBlock(transactions []string, nonce int) {
 
-	newBlock := &Block{transactions, nonce, "", "", time.Now(), bc.tail, nil}
+	newBlock := &Block{transactions, nonce, "", "", time.Now().String(), bc.tail, nil}
 	if bc.tail != nil {
 		newBlock.previousHash = bc.tail.hash
 	} else {
@@ -78,10 +93,18 @@ func (bc *BlockChain) AddBlock(transactions []string, nonce int) {
 		newBlock.previousHash = ""
 	}
 	newBlock.merkleRoot = newBlock.buildMerkleTree()
+	for {
+		str := newBlock.merkleRoot.hash + strconv.Itoa(newBlock.nonce) + newBlock.previousHash + newBlock.timeOfTransaction
+		hash := CalculateHash(str)
 
-	str := newBlock.merkleRoot.hash + strconv.Itoa(newBlock.nonce) + newBlock.previousHash + newBlock.timeOfTransaction.String()
-	newBlock.hash = CalculateHash(str)
-
+		if hash >= bc.minBlockHash && hash <= bc.maxBlockHash {
+			newBlock.hash = hash
+			break
+		} else {
+			fmt.Println("hash not in range, generating new nonce and trying again")
+			newBlock.nonce = generateRandomNonce()
+		}
+	}
 	bc.tail = newBlock
 }
 
@@ -110,21 +133,43 @@ func displayMerkleTree(node *MerkleNode, depthOfTree int, isLeft bool) {
 
 func (bc *BlockChain) DisplayBlockchain() {
 	fmt.Println("Blockchain:")
-	for block := bc.tail; block != nil; block = block.previous {
-		fmt.Println("------------------------------------------------------------------------------------------------------------------")
-		fmt.Printf("Transactions: %s \n Nonce: %d \n Hash: %x \n Previous Hash: %x\n Date and time of Transaction: %s \n", block.transactions, block.nonce, block.hash, block.previousHash, block.timeOfTransaction)
-		fmt.Println("------------------------------------------------------------------------------------------------------------------")
-		fmt.Println()
-		fmt.Println("Merkle Tree:")
-		displayMerkleTree(block.merkleRoot, 0, false)
-		fmt.Println("------------------------------------------------------------------------------------------------------------------")
+	if bc.tail != nil {
+		for block := bc.tail; block != nil; block = block.previous {
+			fmt.Println("------------------------------------------------------------------------------------------------------------------")
+			fmt.Printf("Transactions: %s \n Nonce: %d \n Hash: %x \n Previous Hash: %x\n Date and time of Transaction: %s \n", block.transactions, block.nonce, block.hash, block.previousHash, block.timeOfTransaction)
+			fmt.Println("------------------------------------------------------------------------------------------------------------------")
+			fmt.Println()
+			fmt.Println("Merkle Tree:")
+			displayMerkleTree(block.merkleRoot, 0, false)
+			fmt.Println("------------------------------------------------------------------------------------------------------------------")
+		}
+	} else {
+		fmt.Println("Blockchain is empty")
 	}
+}
+
+func (bc *BlockChain) ChangeBlock(transactionHash string, newTransaction string, blockHash string) {
+	var transactionBlock *Block = nil
+	for block := bc.tail; block != nil; block = block.previous {
+		hash := fmt.Sprintf("%x", []byte(block.hash))
+		if hash == blockHash {
+			transactionBlock = block
+			break
+		}
+	}
+
+	merkleRoot := transactionBlock.merkleRoot
+	transactionNode := findLeafNode(transactionHash, merkleRoot)
+	transactionNode.hash = CalculateHash(newTransaction)
+	fmt.Println("Transaction changed successfully")
+
 }
 
 func findLeafNode(transactionHash string, node *MerkleNode) *MerkleNode {
 	//Check if we have reached a leaf node and if so return the node if its hash matches with the transaction hash
 	if node.left == nil && node.right == nil {
-		if node.hash == transactionHash {
+		nodeHash := fmt.Sprintf("%x", []byte(node.hash))
+		if nodeHash == transactionHash {
 			return node
 		} else {
 			return nil
@@ -145,44 +190,112 @@ func findLeafNode(transactionHash string, node *MerkleNode) *MerkleNode {
 	return nil
 }
 
-func (bc *BlockChain) VerifyTransaction(transactionHash string, blockHash string) bool {
-	var transactionBlock *Block = nil
-	for block := bc.tail; block != nil; block = block.previous {
-		if block.hash == blockHash {
-			transactionBlock = block
-			break
-		}
+func findNode(node *MerkleNode) *MerkleNode {
+	//Check if we have reached a leaf node and if so return the node if its hash matches with the transaction hash
+	if node.left == nil && node.right == nil {
+		return node
 	}
-	if transactionBlock != nil {
-		merkleRoot := transactionBlock.merkleRoot
-		merkleRootHash := merkleRoot.hash
+	//In case we have not reached a leaf node, move to the left node and check if its a leaf node
+	leftNode := findNode(node.left)
+	if leftNode != nil {
+		return leftNode
+	}
+	//In case the transaction hash does not match with any of the leaf nodes' transactions, return nil indicating the transaction
+	//is not present in the block
+	return nil
+}
+func rebuildMerkleTree(nodes []*MerkleNode) string {
+	for len(nodes) > 1 {
 
-		var pathToTransaction []string
-		node := findLeafNode(transactionHash, merkleRoot)
+		var newNodes []*MerkleNode
 
-		for node != nil {
-			if node.left != nil && node.right != nil {
-				if node.left.hash == transactionHash {
-					pathToTransaction = append(pathToTransaction, node.right.hash)
-				} else if node.right.hash == transactionHash {
-					pathToTransaction = append(pathToTransaction, node.left.hash)
-				}
+		for i := 0; i < len(nodes); i += 2 {
+			left := nodes[i]
+			right := nodes[i+1]
+			hash := CalculateHash(fmt.Sprintf("%x", []byte(left.hash)) + fmt.Sprintf("%x", []byte(right.hash)))
+			newNode := &MerkleNode{left, right, hash}
+			newNodes = append(newNodes, newNode)
+
+		}
+
+		nodes = newNodes
+	}
+
+	return nodes[0].hash
+}
+func (bc *BlockChain) VerifyBlockchain() bool {
+	if bc.tail != nil {
+		for block := bc.tail; block != nil; block = block.previous {
+
+			var node *MerkleNode = block.merkleRoot
+			var merkleRootHash string = node.hash
+
+			var nodes []*MerkleNode = GetLeftLeafNodes(node)
+
+			var rootHash string = rebuildMerkleTree(nodes)
+
+			if merkleRootHash != rootHash {
+				fmt.Printf("The block with hash %x is modified.\n", block.hash)
+				return false
+			} else {
+				continue
 			}
-			node = node.parent
 		}
-		transacHash := transactionHash
-		for _, hash := range pathToTransaction {
-			transacHash = transacHash + hash
-		}
-
-		transacHash = transacHash + merkleRootHash
-
-		computedMerkleRoot := CalculateHash(transacHash)
-
-		if computedMerkleRoot == merkleRootHash {
-			return true
-		}
-
+	} else {
+		fmt.Println("Blockchain is empty")
+		return true
 	}
-	return false
+	return true
+}
+
+func GetLeftLeafNodes(node *MerkleNode) []*MerkleNode {
+
+	if node == nil {
+		return nil
+	}
+
+	if node.left == nil && node.right == nil {
+		return []*MerkleNode{node}
+	}
+
+	leftNodes := GetLeftLeafNodes(node.left)
+	rightNodes := GetLeftLeafNodes(node.right)
+
+	return append(leftNodes, rightNodes...)
+}
+
+func findTraceToTransaction(transactionHash string, node *MerkleNode) []string {
+
+	if node == nil {
+		return nil
+	}
+
+	if node.left == nil && node.right == nil {
+		hash := fmt.Sprintf("%x", []byte(node.hash))
+		if hash == transactionHash {
+			return []string{node.hash}
+		} else {
+			return nil
+		}
+	}
+
+	leftTrace := findTraceToTransaction(transactionHash, node.left)
+	if leftTrace != nil {
+		return append(leftTrace, node.right.hash)
+	}
+
+	rightTrace := findTraceToTransaction(transactionHash, node.right)
+	if rightTrace != nil {
+		return append(rightTrace, node.left.hash)
+	}
+
+	return nil
+}
+
+func (bc *BlockChain) SetNumberOfTransactionsPerBlock(numberOfTransactionsPerBlock int) {
+	bc.numberOfTransactionsPerBlock = numberOfTransactionsPerBlock
+}
+func (bc *BlockChain) SetBlockHashRange(min string, max string) {
+	bc.minBlockHash = min
+	bc.maxBlockHash = max
 }
